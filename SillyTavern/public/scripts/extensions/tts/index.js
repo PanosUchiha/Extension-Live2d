@@ -276,7 +276,7 @@ async function playAudioData(audioJob) {
             await window['vrmLipSync'](audioBlob, char);
         }
 
-        // Live2D lip sync ... 
+        // Live2D lip sync. Only need this block.
         if (extension_settings.live2d?.enabled && extension_settings.live2d?.ttsLipSync && typeof window['live2dLipSync'] === 'function') {
             await window['live2dLipSync'](audioBlob, char);
             //return; // Skip default playback since audioTalk handles it
