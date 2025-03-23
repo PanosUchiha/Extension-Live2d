@@ -388,7 +388,8 @@ async function updateExpression(chat_id) {
     // Determine the target model based on expression (customizable via settings)
     let current_model_path = default_model_path; // Start with default
     const model_mapping = {
-        'affection': '/data/default-user/assets/live2d/Onne.v2_swim/04shiho_swim.model3.json',
+        'affection': '/data/default-user/assets/live2d/model/model.model3.json',
+
         // Add more mappings here or move to settings
     };
 
