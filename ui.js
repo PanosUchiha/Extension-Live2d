@@ -80,6 +80,14 @@ async function onFollowCursorClick() {
     await loadLive2d();
 }
 
+
+
+async function onTtsLipSyncClick() {
+    extension_settings.live2d.ttsLipSync = $('#live2d_tts_lip_sync_checkbox').is(':checked');
+    saveSettingsDebounced();
+}
+
+
 async function onAutoSendInteractionClick() {
     extension_settings.live2d.autoSendInteraction = $('#live2d_auto_send_interaction_checkbox').is(':checked');
     saveSettingsDebounced();
@@ -370,10 +378,10 @@ async function loadModelUi() {
     const expression_ui = $('#live2d_expression_mapping');
     const hit_areas_ui = $('#live2d_hit_areas_mapping');
     var t;
-    try{
-        t = await live2d.Live2DModel.from(model_path, null, extension_settings.live2d.characterModelsSettings[character][model_path]['eye']||45)
-    }catch{
-        t = await live2d.Live2DModel.from(model_path)
+    try {
+        t = await live2d.Live2DModel.from(model_path, null, extension_settings.live2d.characterModelsSettings[character][model_path]['eye'] || 45);
+    } catch {
+        t = await live2d.Live2DModel.from(model_path);
     }
     const model = t;
 
@@ -382,27 +390,38 @@ async function loadModelUi() {
 
     console.debug(DEBUG_PREFIX, 'loading settings of model:', model);
 
-    let model_expressions = model.internalModel.settings.expressions;
-    let model_motions = model.internalModel.settings.motions;
-    let model_hit_areas = model.internalModel.hitAreas;
-    let model_parameter_ids = model.internalModel.coreModel._model?.parameters?.ids ?? []; // Some model have it there
+    // Ensure settings structure exists at all levels
+    extension_settings.live2d = extension_settings.live2d || {};
+    extension_settings.live2d.enabled = true; // Default to enabled
+    extension_settings.live2d.characterModelsSettings = extension_settings.live2d.characterModelsSettings || {};
+    extension_settings.live2d.characterModelsSettings[character] = extension_settings.live2d.characterModelsSettings[character] || {};
+
+    let model_expressions = model.internalModel.settings.expressions || [];
+    let model_motions = model.internalModel.settings.motions || {};
+    let model_hit_areas = model.internalModel.hitAreas || {};
+    let model_parameter_ids = model.internalModel.coreModel._model?.parameters?.ids ?? []; // Some models have it there
     let user_settings_exists = true;
 
     // Free memory
     model.destroy(true, true, true);
 
-    // Default values
-    if (model_expressions === undefined)
+    // Guard against invalid model data
+    if (!Array.isArray(model_expressions)) {
+        console.warn(DEBUG_PREFIX, 'Invalid expressions, using empty array');
         model_expressions = [];
-
-    if (model_motions === undefined)
+    }
+    if (typeof model_motions !== 'object' || model_motions === null) {
+        console.warn(DEBUG_PREFIX, 'Invalid motions, using empty object');
         model_motions = {};
-
-    if (model_hit_areas === undefined)
+    }
+    if (typeof model_hit_areas !== 'object' || model_hit_areas === null) {
+        console.warn(DEBUG_PREFIX, 'Invalid hit areas, using empty object');
         model_hit_areas = {};
-
-    if (model_parameter_ids === undefined)
+    }
+    if (!Array.isArray(model_parameter_ids)) {
+        console.warn(DEBUG_PREFIX, 'Invalid parameter IDs, using empty array');
         model_parameter_ids = [];
+    }
 
     model_expressions.sort();
     model_parameter_ids.sort();
@@ -412,27 +431,25 @@ async function loadModelUi() {
     console.debug(DEBUG_PREFIX, 'hit areas:', model_hit_areas);
     console.debug(DEBUG_PREFIX, 'parameter ids:', model_parameter_ids);
 
-    // Initialize new model
-    if (extension_settings.live2d.characterModelsSettings[character] === undefined)
-        extension_settings.live2d.characterModelsSettings[character] = {};
-
-    if (extension_settings.live2d.characterModelsSettings[character][model_path] === undefined) {
+    // Initialize new model settings if missing
+    if (!extension_settings.live2d.characterModelsSettings[character][model_path]) {
         user_settings_exists = false;
         const default_scale = 1.0;
         extension_settings.live2d.characterModelsSettings[character][model_path] = {
             'scale': default_scale,
             'x': 0.0,
             'y': 0.0,
-            'eye':45,
+            'eye': 45,
             'cursor_param': {
-                'idParamAngleX' : 'none',
-                'idParamAngleY' : 'none',
-                'idParamAngleZ' : 'none',
-                'idParamBodyAngleX' : 'none',
-                'idParamBreath' : 'none',
-                'idParamEyeBallX' : 'none',
-                'idParamEyeBallY' : 'none',
+                'idParamAngleX': 'none',
+                'idParamAngleY': 'none',
+                'idParamAngleZ': 'none',
+                'idParamBodyAngleX': 'none',
+                'idParamBreath': 'none',
+                'idParamEyeBallX': 'none',
+                'idParamEyeBallY': 'none',
             },
+            'ttsLipSync': false, // Default off, toggle via UI
             'param_mouth_open_y_id': 'none',
             'mouth_open_speed': 1.0,
             'mouth_time_per_character': 30,
@@ -442,33 +459,51 @@ async function loadModelUi() {
             'hit_areas': {},
             'classify_mapping': {},
         };
+    }
 
-        for (const expression of CLASSIFY_EXPRESSIONS) {
+    // Ensure classify_mapping has all expressions, even for existing settings
+    extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'] = extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'] || {};
+    for (const expression of CLASSIFY_EXPRESSIONS) {
+        if (!extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression]) {
+            console.debug(DEBUG_PREFIX, 'Adding missing classify_mapping for:', expression);
             extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression] = { 'expression': 'none', 'motion': 'none' };
         }
+    }
 
+    // Populate hit_areas if new
+    if (user_settings_exists) {
+        extension_settings.live2d.characterModelsSettings[character][model_path]['hit_areas'] = extension_settings.live2d.characterModelsSettings[character][model_path]['hit_areas'] || {};
+        for (const area in model_hit_areas) {
+            if (!extension_settings.live2d.characterModelsSettings[character][model_path]['hit_areas'][area]) {
+                extension_settings.live2d.characterModelsSettings[character][model_path]['hit_areas'][area] = { 'expression': 'none', 'motion': 'none', 'message': '' };
+            }
+        }
+    } else {
         for (const area in model_hit_areas) {
             extension_settings.live2d.characterModelsSettings[character][model_path]['hit_areas'][area] = { 'expression': 'none', 'motion': 'none', 'message': '' };
         }
+    }
 
-        // Check if model has default settings
-        const model_settings_path = model_path.substring(0, model_path.lastIndexOf('/'))+"/sillytavern_settings.json"
-        console.debug(DEBUG_PREFIX,"Checking if setting file exist in ",model_settings_path)
+    // Check for external settings file (unchanged)
+    if (!user_settings_exists) {
+        const model_settings_path = model_path.substring(0, model_path.lastIndexOf('/')) + "/sillytavern_settings.json";
+        console.debug(DEBUG_PREFIX, "Checking if setting file exist in ", model_settings_path);
         try {
             const response = await fetch(model_settings_path);
-            if (response.ok){
+            if (response.ok) {
                 const result = await response.json();
-                console.debug(DEBUG_PREFIX,"File found");
+                console.debug(DEBUG_PREFIX, "File found");
                 extension_settings.live2d.characterModelsSettings[character][model_path] = result;
             }
         } catch (error) {
-            console.debug(DEBUG_PREFIX,"File not found, using default value");
+            console.debug(DEBUG_PREFIX, "File not found, using default value");
         }
-        console.debug(DEBUG_PREFIX,"Default settings:",extension_settings.live2d.characterModelsSettings[character][model_path])
-
-        saveSettingsDebounced();
+        console.debug(DEBUG_PREFIX, "Default settings:", extension_settings.live2d.characterModelsSettings[character][model_path]);
     }
 
+    saveSettingsDebounced();
+
+    // UI setup (sliders, etc.)
     $('#live2d_model_scale').val(extension_settings.live2d.characterModelsSettings[character][model_path]['scale']);
     $('#live2d_model_scale_value').text(extension_settings.live2d.characterModelsSettings[character][model_path]['scale']);
 
@@ -485,30 +520,7 @@ async function loadModelUi() {
     $('#live2d_model_mouth_time_per_character').val(extension_settings.live2d.characterModelsSettings[character][model_path]['mouth_time_per_character']);
     $('#live2d_model_mouth_time_per_character_value').text(extension_settings.live2d.characterModelsSettings[character][model_path]['mouth_time_per_character']);
 
-    /*/ Param mouth open Y id candidates
-  $("#live2d_model_param_mouth_open_y_select")
-    .find('option')
-    .remove()
-    .end()
-    .append('<option value="none">Select parameter id</option>');
-
-  for (const i of model_parameter_ids) {
-    $(`#live2d_model_param_mouth_open_y_select`).append(new Option(i, i));
-  }
-
-  // Default mouth open Y parameter detection
-  if (!user_settings_exists && extension_settings.live2d.characterModelsSettings[character][model_path]["param_mouth_open_y_id"] == "none") {
-    console.debug(DEBUG_PREFIX,"First time loading model for this character, searching for mouth open Y parameter")
-    if (model_parameter_ids.includes(PARAM_MOUTH_OPEN_Y_DEFAULT)) {
-      console.debug(DEBUG_PREFIX,"Found default parameter",PARAM_MOUTH_OPEN_Y_DEFAULT)
-      extension_settings.live2d.characterModelsSettings[character][model_path]["param_mouth_open_y_id"] = PARAM_MOUTH_OPEN_Y_DEFAULT;
-      saveSettingsDebounced();
-    }
-  }
-
-  $("#live2d_model_param_mouth_open_y_select").val(extension_settings.live2d.characterModelsSettings[character][model_path]["param_mouth_open_y_id"]);*/
-
-	// MouthAnimations
+    // MouthAnimations
     loadModelParamUi(character, model_path, model_parameter_ids, 'live2d_model_param_mouth_open_y_select', 'ParamMouthOpenY', user_settings_exists);
 
     // Mouse tracking parameters
@@ -527,7 +539,8 @@ async function loadModelUi() {
         'live2d_starter_expression_select',
         'live2d_starter_motion_select',
         extension_settings.live2d.characterModelsSettings[character][model_path]['animation_starter']['expression'],
-        extension_settings.live2d.characterModelsSettings[character][model_path]['animation_starter']['motion']);
+        extension_settings.live2d.characterModelsSettings[character][model_path]['animation_starter']['motion']
+    );
     $('#live2d_starter_delay').val(extension_settings.live2d.characterModelsSettings[character][model_path]['animation_starter']['delay']);
     $('#live2d_starter_delay_value').text(extension_settings.live2d.characterModelsSettings[character][model_path]['animation_starter']['delay']);
 
@@ -538,7 +551,8 @@ async function loadModelUi() {
         'live2d_default_expression_select',
         'live2d_default_motion_select',
         extension_settings.live2d.characterModelsSettings[character][model_path]['animation_default']['expression'],
-        extension_settings.live2d.characterModelsSettings[character][model_path]['animation_default']['motion']);
+        extension_settings.live2d.characterModelsSettings[character][model_path]['animation_default']['motion']
+    );
 
     // Default click animation
     loadAnimationUi(
@@ -547,7 +561,8 @@ async function loadModelUi() {
         'live2d_hit_area_default_expression_select',
         'live2d_hit_area_default_motion_select',
         extension_settings.live2d.characterModelsSettings[character][model_path]['animation_click']['expression'],
-        extension_settings.live2d.characterModelsSettings[character][model_path]['animation_click']['motion']);
+        extension_settings.live2d.characterModelsSettings[character][model_path]['animation_click']['motion']
+    );
     $('#live2d_hit_area_default_message').val(extension_settings.live2d.characterModelsSettings[character][model_path]['animation_click']['message']);
 
     // Hit areas mapping
@@ -586,7 +601,8 @@ async function loadModelUi() {
             `live2d_hit_area_expression_select_${hit_area}`,
             `live2d_hit_area_motion_select_${hit_area}`,
             extension_settings.live2d.characterModelsSettings[character][model_path]['hit_areas'][hit_area]['expression'],
-            extension_settings.live2d.characterModelsSettings[character][model_path]['hit_areas'][hit_area]['motion']);
+            extension_settings.live2d.characterModelsSettings[character][model_path]['hit_areas'][hit_area]['motion']
+        );
 
         $(`#live2d_hit_area_message_${hit_area}`).val(extension_settings.live2d.characterModelsSettings[character][model_path]['hit_areas'][hit_area]['message']);
 
@@ -597,8 +613,9 @@ async function loadModelUi() {
         $(`#live2d_hit_area_motion_replay_${hit_area}`).on('click', function () { updateHitAreaMapping(hit_area); });
     }
 
-    // Classify expressions mapping
+    // Classify expressions mapping - Append all first
     for (const expression of CLASSIFY_EXPRESSIONS) {
+        console.log(DEBUG_PREFIX, 'Appending UI for:', expression);
         expression_ui.append(`
     <div class="live2d-parameter">
         <div class="live2d-parameter-title">
@@ -624,14 +641,22 @@ async function loadModelUi() {
         </div>
     </div>
     `);
+    }
 
+    // Ensure DOM updates before populating
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Populate dropdowns
+    for (const expression of CLASSIFY_EXPRESSIONS) {
+        console.log(DEBUG_PREFIX, 'Populating:', expression);
         loadAnimationUi(
             model_expressions,
             model_motions,
             `live2d_expression_select_${expression}`,
             `live2d_motion_select_${expression}`,
             extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression]['expression'],
-            extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression]['motion']);
+            extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression]['motion']
+        );
 
         $(`#live2d_expression_select_${expression}`).on('change', function () { updateExpressionMapping(expression); });
         $(`#live2d_motion_select_${expression}`).on('change', function () { updateExpressionMapping(expression); });
@@ -639,9 +664,11 @@ async function loadModelUi() {
         $(`#live2d_motion_replay_${expression}`).on('click', function () { updateExpressionMapping(expression); });
     }
 
+    $('#live2d_tts_lip_sync_checkbox').on('change', onTtsLipSyncClick);
+    $('#live2d_tts_lip_sync_checkbox').prop('checked', extension_settings.live2d.ttsLipSync || false);
+
     $('#live2d_model_settings').show();
 }
-
 
 async function updateHitAreaMapping(hitArea) {
     const character = String($('#live2d_character_select').val());
@@ -839,3 +866,4 @@ async function playStarterAnimation() {
     console.debug(DEBUG_PREFIX,'Make canvas visible');
     setVisible();
 }
+
