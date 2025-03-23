@@ -1,3 +1,5 @@
+let tts_lips_sync_job_id = 0;
+let defaultModelPaths = {};
 
 import { trimToEndSentence, trimToStartSentence } from '../../../utils.js';
 import { getRequestHeaders, saveSettings, saveSettingsDebounced, sendMessageAsUser } from '../../../../script.js';
@@ -282,10 +284,25 @@ async function loadLive2d(visible = true) {
             m = await live2d.Live2DModel.from(model_path);
         }
         const model = m;
+
+
+
+
+
+
         model.st_character = character;
         model.st_model_path = model_path;
         model.is_dragged = false;
         console.debug(DEBUG_PREFIX,'loaded',model);
+
+
+
+
+        // Store the default model path for this character
+        defaultModelPaths[character] = model_path;
+
+
+
 
         // Apply basic cursor animations
         if (model.internalModel !== undefined) {
@@ -354,44 +371,139 @@ async function loadLive2d(visible = true) {
 async function updateExpression(chat_id) {
     const message = getContext().chat[chat_id];
     const character = message.name;
-    const model_path = extension_settings.live2d.characterModelMapping[character];
+    const default_model_path = defaultModelPaths[character] || extension_settings.live2d.characterModelMapping[character];
 
-    console.debug(DEBUG_PREFIX,'received new message :', message.mes);
+    console.debug(DEBUG_PREFIX, 'received new message:', message.mes);
 
-    if (message.is_user)
-        return;
+    if (message.is_user) return;
 
-    if (model_path === undefined) {
+    if (!default_model_path) {
         console.debug(DEBUG_PREFIX, 'No model assigned to', character);
         return;
     }
 
     const expression = await getExpressionLabel(message.mes);
-    let model_expression = extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression]['expression'];
-    let model_motion = extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression]['motion'];
+    console.debug(DEBUG_PREFIX, 'Detected expression in message:', expression);
 
-    console.debug(DEBUG_PREFIX,'Detected expression in message:',expression);
+    // Determine the target model based on expression (customizable via settings)
+    let current_model_path = default_model_path; // Start with default
+    const model_mapping = {
+        'affection': '/data/default-user/assets/live2d/Onne.v2_swim/04shiho_swim.model3.json',
+        // Add more mappings here or move to settings
+    };
+
+    // Check if the expression has a specific model assigned
+    if (model_mapping[expression]) {
+        current_model_path = model_mapping[expression];
+        console.debug(DEBUG_PREFIX, `Switching to model ${current_model_path} for expression ${expression}`);
+        await switchModel(character, current_model_path, default_model_path);
+    } else if (models[character]?.st_model_path !== default_model_path) {
+        // Revert to default model if no specific mapping exists
+        console.debug(DEBUG_PREFIX, `Reverting to default model ${default_model_path} for ${character}`);
+        await switchModel(character, default_model_path, default_model_path);
+        current_model_path = default_model_path;
+    }
+
+    // Ensure classify_mapping exists for this model and expression
+    if (!extension_settings.live2d.characterModelsSettings[character][current_model_path]['classify_mapping'][expression]) {
+        console.debug(DEBUG_PREFIX, `No classify_mapping for ${expression} in ${current_model_path}, adding default`);
+        extension_settings.live2d.characterModelsSettings[character][current_model_path]['classify_mapping'][expression] = { 'expression': 'none', 'motion': 'none' };
+        saveSettingsDebounced();
+    }
+
+    let model_expression = extension_settings.live2d.characterModelsSettings[character][current_model_path]['classify_mapping'][expression]['expression'];
+    let model_motion = extension_settings.live2d.characterModelsSettings[character][current_model_path]['classify_mapping'][expression]['motion'];
 
     // Fallback animations
-    if (model_expression == 'none') {
-        console.debug(DEBUG_PREFIX,'Expression is none, applying default expression', model_expression);
-        model_expression = extension_settings.live2d.characterModelsSettings[character][model_path]['animation_default']['expression'];
+    if (model_expression === 'none') {
+        console.debug(DEBUG_PREFIX, 'Expression is none, applying default expression');
+        model_expression = extension_settings.live2d.characterModelsSettings[character][current_model_path]['animation_default']['expression'];
+    }
+    if (model_motion === 'none') {
+        console.debug(DEBUG_PREFIX, 'Motion is none, playing default motion');
+        model_motion = extension_settings.live2d.characterModelsSettings[character][current_model_path]['animation_default']['motion'];
     }
 
-    if (model_motion == 'none') {
-        console.debug(DEBUG_PREFIX,'Motion is none, playing default motion',model_motion);
-        model_motion = extension_settings.live2d.characterModelsSettings[character][model_path]['animation_default']['motion'];
-    }
+    console.debug(DEBUG_PREFIX, 'Playing expression', expression, ':', model_expression, model_motion);
 
-    console.debug(DEBUG_PREFIX,'Playing expression',expression,':', model_expression, model_motion);
-
-    if (model_expression != 'none') {
+    if (models[character] && model_expression !== 'none') {
         models[character].expression(model_expression);
     }
-
-    if (model_motion != 'none') {
+    if (models[character] && model_motion !== 'none') {
         await playMotion(character, model_motion);
     }
+}
+
+async function switchModel(character, newModelPath, defaultModelPath) {
+    let previousScale = 1;
+    let previousX = 0;
+    let previousY = 0;
+
+    // Capture previous model's scale and position if it exists
+    if (models[character]) {
+        previousScale = models[character].scale.y;
+        previousX = extension_settings.live2d.characterModelsSettings[character][models[character].st_model_path]['x'];
+        previousY = extension_settings.live2d.characterModelsSettings[character][models[character].st_model_path]['y'];
+        models[character].destroy(true, true, true);
+        delete models[character];
+        console.debug(DEBUG_PREFIX, 'Deleted old model from memory for', character);
+    }
+
+    // Ensure PIXI app is initialized
+    if (!app) {
+        console.debug(DEBUG_PREFIX, 'PIXI app not initialized, calling loadLive2d');
+        await loadLive2d();
+    }
+
+    // Ensure settings exist for the new model path, inheriting from default if available
+    if (!extension_settings.live2d.characterModelsSettings[character][newModelPath]) {
+        extension_settings.live2d.characterModelsSettings[character][newModelPath] = {
+            scale: extension_settings.live2d.characterModelsSettings[character][defaultModelPath]?.scale || 1,
+            x: previousX,
+            y: previousY,
+            eye: extension_settings.live2d.characterModelsSettings[character][defaultModelPath]?.eye || 45,
+            classify_mapping: extension_settings.live2d.characterModelsSettings[character][defaultModelPath]?.classify_mapping || { anger: { expression: 'none', motion: 'none' }, neutral: { expression: 'none', motion: 'none' } },
+            animation_default: extension_settings.live2d.characterModelsSettings[character][defaultModelPath]?.animation_default || { expression: 'none', motion: 'none' }
+        };
+    }
+
+    let model;
+    try {
+        model = await live2d.Live2DModel.from(newModelPath, null, extension_settings.live2d.characterModelsSettings[character][newModelPath]['eye'] || 45);
+    } catch (error) {
+        console.error(DEBUG_PREFIX, `Failed to load model ${newModelPath} for ${character}:`, error);
+        return;
+    }
+
+    model.st_character = character;
+    model.st_model_path = newModelPath;
+    model.is_dragged = false;
+    console.debug(DEBUG_PREFIX, 'Loaded new model for', character);
+
+    models[character] = model;
+    app.stage.addChild(model);
+
+    // Apply the previous scale directly
+    const scaleY = previousScale;
+    console.debug(DEBUG_PREFIX, `Applying previous scale ${scaleY} to new model (height: ${model.height})`);
+    model.scale.set(scaleY);
+
+    // Apply previous position
+    moveModel(character, previousX, previousY);
+    console.debug(DEBUG_PREFIX, `Moved model to x: ${model.x}, y: ${model.y}`);
+
+    draggable(model);
+
+    if (extension_settings.live2d.showFrames) showFrames(model);
+
+    model.on('hit', (hitAreas) => onHitAreasClick(character, hitAreas));
+    model.on('click', (e) => onClick(model, e.data.global.x, e.data.global.y));
+
+    model.autoInteract = extension_settings.live2d.followCursor;
+    console.debug(DEBUG_PREFIX, 'Finished loading new model:', model);
+
+    // Only update characterModelMapping temporarily; revert to default in updateExpression
+    // extension_settings.live2d.characterModelMapping[character] remains the default
 }
 
 async function getExpressionLabel(text) {
@@ -536,68 +648,61 @@ async function playMotion(character, motion, force = false) {
     last_motion[character] = motion;
 }
 
+// Hook into TTS system
+window['live2dLipSync'] = audioTalk;
+
 async function playTalk(character, text) {
     console.debug(DEBUG_PREFIX,'Playing mouth animation for',character,'message:',text);
     // No model loaded for character
     if (models[character] === undefined)
         return;
+    
+    const model_path = extension_settings.live2d.characterModelMapping[character];
+    const ttsLipSyncEnabled = extension_settings.live2d.ttsLipSync;
+
+    if (ttsLipSyncEnabled) {
+        console.debug(DEBUG_PREFIX, 'TTS lip sync enabled, waiting for audio blob');
+        // TTS will trigger audioTalk via window['live2dLipSync']
+        return;
+    }
 
     abortTalking[character] = false;
 
     // Character is already talking TODO: stop previous talk animation
-    if (is_talking[character] !== undefined && is_talking[character] == true) {
-        console.debug(DEBUG_PREFIX,'Character is already talking abort');
+    if (is_talking[character]) {
+        console.debug(DEBUG_PREFIX, 'Character is already talking, aborting');
         while (is_talking[character]) {
             abortTalking[character] = true;
             await delay(100);
         }
         abortTalking[character] = false;
-        console.debug(DEBUG_PREFIX,'Start new talk');
-        //return;
     }
 
     const model = models[character];
-    const model_path = extension_settings.live2d.characterModelMapping[character];
     const parameter_mouth_open_y_id = extension_settings.live2d.characterModelsSettings[character][model_path]['param_mouth_open_y_id'];
     const mouth_open_speed = extension_settings.live2d.characterModelsSettings[character][model_path]['mouth_open_speed'];
     const mouth_time_per_character = extension_settings.live2d.characterModelsSettings[character][model_path]['mouth_time_per_character'];
 
-    // No mouth parameter set
-    if (parameter_mouth_open_y_id == 'none') {
-        return;
-    }
-
-    if (typeof model.internalModel.coreModel.addParameterValueById !== 'function') {
-        console.debug(DEBUG_PREFIX,'Model has no addParameterValueById function cannot animate mouth');
-        return;
-    }
+    if (parameter_mouth_open_y_id === 'none') return;
+    if (typeof model.internalModel.coreModel.addParameterValueById !== 'function') return;
 
     is_talking[character] = true;
-    let startTime = Date.now();
+    const startTime = Date.now();
     const duration = text.length * mouth_time_per_character;
-    let turns = 0;
     let mouth_y = 0;
-    while ((Date.now() - startTime) < duration) {
-        if (abortTalking[character]) {
-            console.debug(DEBUG_PREFIX,'Abort talking requested.');
-            break;
-        }
 
-        // Model destroyed during animation
-        if (model?.internalModel?.coreModel === undefined) {
-            console.debug(DEBUG_PREFIX,'Model destroyed during talking animation, abort');
-            break;
-        }
+    while ((Date.now() - startTime) < duration) {
+        if (abortTalking[character]) break;
+        if (!model?.internalModel?.coreModel) break;
 
         mouth_y = Math.sin((Date.now() - startTime));
         model.internalModel.coreModel.addParameterValueById(parameter_mouth_open_y_id, mouth_y);
-        //console.debug(DEBUG_PREFIX,"Mouth_y:", mouth_y, "VS",model.internalModel.coreModel.getParameterValueById(parameter_mouth_open_y_id), "remaining time", duration - (Date.now() - startTime));
         await delay(100 / mouth_open_speed);
-        turns += 1;
     }
 
-    if (model?.internalModel?.coreModel !== undefined)
-        model.internalModel.coreModel.addParameterValueById(parameter_mouth_open_y_id, -100); // close mouth
+    if (model?.internalModel?.coreModel) {
+        model.internalModel.coreModel.addParameterValueById(parameter_mouth_open_y_id, -100);
+    }
     is_talking[character] = false;
 }
 
@@ -649,4 +754,105 @@ function forceLoopAnimation() {
             //console.debug(DEBUG_PREFIX,"Force looping of motion",motion);
         }
     }
+}
+
+async function audioTalk(blob, character) {
+    if (!extension_settings.live2d.ttsLipSync) {
+        console.log(DEBUG_PREFIX, 'TTS lip sync disabled, falling back to text-based animation');
+        return;
+    }
+
+    tts_lips_sync_job_id++;
+    const job_id = tts_lips_sync_job_id;
+    console.log(DEBUG_PREFIX, 'Received TTS lip sync for', character, 'job:', job_id);
+
+    if (!models[character]) {
+        console.log(DEBUG_PREFIX, 'No model loaded for', character);
+        return;
+    }
+
+    const model = models[character];
+    const model_path = extension_settings.live2d.characterModelMapping[character];
+    const parameter_mouth_open_y_id = extension_settings.live2d.characterModelsSettings[character][model_path]['param_mouth_open_y_id'];
+
+    if (parameter_mouth_open_y_id === 'none') {
+        console.log(DEBUG_PREFIX, 'No mouth parameter set for', character);
+        return;
+    }
+
+    if (typeof model.internalModel.coreModel.addParameterValueById !== 'function') {
+        console.log(DEBUG_PREFIX, 'Model lacks addParameterValueById, cannot animate mouth');
+        return;
+    }
+
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+        console.log(DEBUG_PREFIX, 'AudioContext resumed');
+    }
+
+    try {
+        await audioContext.audioWorklet.addModule('/extensions/Extension-Live2d/lipSyncWorklet.js');
+    } catch (e) {
+        console.error(DEBUG_PREFIX, 'Failed to load lipSyncWorklet:', e);
+        return;
+    }
+
+    const analyser = audioContext.createAnalyser();
+    analyser.smoothingTimeConstant = 0.3; // Smoother response
+    analyser.fftSize = 1024;
+
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(analyser);
+
+    const lipSyncNode = new AudioWorkletNode(audioContext, 'lip-sync-processor', {
+        processorOptions: { jobId: job_id, mouthThreshold: 5, mouthBoost: 40 } // Adjusted
+    });
+    analyser.connect(lipSyncNode);
+    lipSyncNode.connect(audioContext.destination);
+
+    let hasStarted = false;
+
+    function endTalk() {
+        if (hasStarted) {
+            source.stop(0);
+        }
+        source.disconnect();
+        analyser.disconnect();
+        lipSyncNode.disconnect();
+        if (models[character]?.internalModel?.coreModel) {
+            model.internalModel.coreModel.addParameterValueById(parameter_mouth_open_y_id, -100); // Close with -100
+            console.log(DEBUG_PREFIX, 'Mouth set to -100 at end');
+        }
+        audio.removeEventListener('ended', endTalk);
+        is_talking[character] = false;
+    }
+
+    lipSyncNode.port.onmessage = (event) => {
+        const { jobId, mouthValue, average } = event.data;
+        if (jobId !== tts_lips_sync_job_id) {
+            console.log(DEBUG_PREFIX, 'Job cancelled due to new job');
+            endTalk();
+            return;
+        }
+        const mouthValueScaled = mouthValue * 200 - 100; // 0–1 to -100–100
+        console.log(DEBUG_PREFIX, 'Average:', average, 'Mouth value:', mouthValueScaled);
+        model.internalModel.coreModel.addParameterValueById(parameter_mouth_open_y_id, mouthValueScaled);
+        if (!is_talking[character]) {
+            is_talking[character] = true;
+            console.log(DEBUG_PREFIX, 'Talking started');
+        }
+    };
+
+    source.onended = endTalk;
+    source.start(0);
+    hasStarted = true;
+
+    const audio = new Audio(URL.createObjectURL(blob));
+    audio.play();
+    audio.addEventListener('ended', endTalk);
 }
