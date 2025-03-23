@@ -800,7 +800,18 @@ async function audioTalk(blob, character) {
     }
 
     const analyser = audioContext.createAnalyser();
-    analyser.smoothingTimeConstant = 0.3; // Smoother response
+
+    // Controls how much the analyzer smooths out changes between audio frames
+    // Range is 0-1: 
+    // - Lower values (like 0.1) = more reactive/jittery mouth movement
+    // - Higher values (like 0.8) = smoother but less responsive movement
+    // 0.3 is a balanced value for natural-looking speech
+    analyser.smoothingTimeConstant = 0.3;
+
+    // Sets the FFT (Fast Fourier Transform) size for audio analysis
+    // Must be a power of 2 between 32-32768
+    // Larger = more detailed frequency data but more CPU intensive
+    // 1024 provides good balance between detail and performance
     analyser.fftSize = 1024;
 
     const arrayBuffer = await blob.arrayBuffer();
@@ -810,8 +821,13 @@ async function audioTalk(blob, character) {
     source.buffer = audioBuffer;
     source.connect(analyser);
 
+    // Options passed to the lip sync processor:
+    //processorOptions 
+    //    jobId: job_id,       // Tracks which audio job is currently playing
+    //    mouthThreshold: 5,   // Minimum audio level to start opening mouth (0-100)
+    //    mouthBoost: 40      // Amplifies mouth movement (higher = more exaggerated)
     const lipSyncNode = new AudioWorkletNode(audioContext, 'lip-sync-processor', {
-        processorOptions: { jobId: job_id, mouthThreshold: 5, mouthBoost: 40 } // Adjusted
+        processorOptions: { jobId: job_id, mouthThreshold: 5, mouthBoost: 20 } // Adjusted
     });
     analyser.connect(lipSyncNode);
     lipSyncNode.connect(audioContext.destination);
@@ -854,6 +870,6 @@ async function audioTalk(blob, character) {
     hasStarted = true;
 
     const audio = new Audio(URL.createObjectURL(blob));
-    // audio.play(); // Fixes double audio
+    //audio.play();
     audio.addEventListener('ended', endTalk);
 }
