@@ -388,3 +388,4 @@ async function resetParametersSlashCommand(args) {
 
     await resetParameters(character);
 }
+
