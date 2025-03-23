@@ -841,7 +841,7 @@ async function audioTalk(blob, character) {
             return;
         }
         const mouthValueScaled = mouthValue * 200 - 100; // 0–1 to -100–100
-        console.log(DEBUG_PREFIX, 'Average:', average, 'Mouth value:', mouthValueScaled);
+        // console.log(DEBUG_PREFIX, 'Average:', average, 'Mouth value:', mouthValueScaled);
         model.internalModel.coreModel.addParameterValueById(parameter_mouth_open_y_id, mouthValueScaled);
         if (!is_talking[character]) {
             is_talking[character] = true;
