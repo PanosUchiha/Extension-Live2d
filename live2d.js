@@ -854,6 +854,6 @@ async function audioTalk(blob, character) {
     hasStarted = true;
 
     const audio = new Audio(URL.createObjectURL(blob));
-    // audio.play();
+    // audio.play(); // Fixes double audio
     audio.addEventListener('ended', endTalk);
 }
