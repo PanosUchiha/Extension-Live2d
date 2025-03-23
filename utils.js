@@ -155,3 +155,4 @@ function loadAnimationUi(model_expressions, model_motions, expression_select_id,
     $(`#${expression_select_id}`).val(expression_select_value);
     $(`#${motion_select_id}`).val(motion_select_value);
 }
+
